@@ -14,9 +14,13 @@ class BitmapFile {
     );
     final info = BitmapInfo.fromBytes(buffer.asByteData(
       BitmapFileHeader.structureSize,
-      header.offBits,
+      header.offBits - BitmapFileHeader.structureSize,
     ));
-    final pixels = _parsePixels(buffer, header, info);
+    final pixels = _parsePixels(
+      buffer.asUint8List().sublist(header.offBits).buffer,
+      header,
+      info,
+    );
 
     return BitmapFile._(header, info, pixels);
   }
@@ -30,68 +34,78 @@ class BitmapFile {
       case 0:
         return [];
       case 1:
-        return buffer
-            .asUint8List()
-            .skip(header.offBits)
-            .expand((element) => [
-                  element & 1 << 7 == 0 ? 0 : 1,
-                  element & 1 << 6 == 0 ? 0 : 1,
-                  element & 1 << 5 == 0 ? 0 : 1,
-                  element & 1 << 4 == 0 ? 0 : 1,
-                  element & 1 << 3 == 0 ? 0 : 1,
-                  element & 1 << 2 == 0 ? 0 : 1,
-                  element & 1 << 1 == 0 ? 0 : 1,
-                  element & 1 << 0 == 0 ? 0 : 1,
-                ])
-            .toList();
+        return buffer.asUint8List().expand((element) => [
+              element & 1 << 7 == 0 ? 0 : 1,
+              element & 1 << 6 == 0 ? 0 : 1,
+              element & 1 << 5 == 0 ? 0 : 1,
+              element & 1 << 4 == 0 ? 0 : 1,
+              element & 1 << 3 == 0 ? 0 : 1,
+              element & 1 << 2 == 0 ? 0 : 1,
+              element & 1 << 1 == 0 ? 0 : 1,
+              element & 1 << 0 == 0 ? 0 : 1,
+            ]);
       case 4:
-        return buffer
-            .asUint8List()
-            .skip(header.offBits)
-            .expand((element) => [
-                  element & (1 << 7 | 1 << 6 | 1 << 5 | 1 << 4),
-                  element & (1 << 3 | 1 << 2 | 1 << 1 | 1 << 0),
-                ])
-            .toList();
+        return buffer.asUint8List().expand((element) => [
+              element & (1 << 7 | 1 << 6 | 1 << 5 | 1 << 4),
+              element & (1 << 3 | 1 << 2 | 1 << 1 | 1 << 0),
+            ]);
       case 8:
-        return buffer.asUint8List().skip(header.offBits).toList();
+        return buffer.asUint8List();
       case 16:
-        final values = buffer.asUint16List().skip(header.offBits ~/ 2);
-        return info.header.compression == BICompression.bitFields
-            ? values
-                .map((element) =>
-                    (element & info.blueMask) |
-                    (element & info.greenMask) |
-                    (element & info.redMask))
-                .toList()
-            : values
-                .map((element) =>
-                    (element &
-                        (1 << 14 | 1 << 13 | 1 << 12 | 1 << 11 | 1 << 10)) |
-                    (element & (1 << 9 | 1 << 8 | 1 << 7 | 1 << 6 | 1 << 5)) |
-                    (element & (1 << 4 | 1 << 3 | 1 << 2 | 1 << 1 | 1 << 0)))
-                .toList();
+        return buffer.asUint16List().map((e) {
+          final isBitField = info.header.compression == BICompression.bitFields;
+
+          // Default color masks for 16bpp.
+          // 0x7c00 = 0111 1100 0000 0000 (red)
+          //  0x3e0 = 0000 0011 1110 0000 (green)
+          //   0x1f = 0000 0000 0001 1111 (blue)
+          final redMask = isBitField ? info.redMask : 0x7c00;
+          final greenMask = isBitField ? info.greenMask : 0x3e0;
+          final blueMask = isBitField ? info.blueMask : 0x1f;
+
+          var offsetRed = 0;
+          var offsetGreen = 0;
+          var offsetBlue = 0;
+
+          // Specify offsets for make ARGB model.
+          if (isBitField) {
+            while ((redMask & (1 << offsetRed)) == 0) offsetRed++;
+            while ((greenMask & (1 << offsetGreen)) == 0) offsetGreen++;
+            while ((blueMask & (1 << offsetBlue)) == 0) offsetBlue++;
+          } else {
+            offsetRed = 10;
+            offsetRed = 5;
+          }
+
+          // Red and green values have already shifted to the left respectively.
+          // So shift remain bits for each. But blue color must start from least
+          // significant bit. So shift to the right.
+          return 0xff000000 |
+              ((e & redMask) << (16 - offsetRed)) |
+              ((e & greenMask) << (8 - offsetGreen)) |
+              (e & blueMask) >> offsetBlue;
+        }).toList();
       case 24:
         return buffer
             .asUint8List()
-            .skip(header.offBits)
             .fold<List<List<int>>>(
                 [[]],
-                (subList, value) => subList.last.length < 3
-                    ? (subList..last.add(value))
-                    : (subList..add([value])))
-            .map((e) => e[0] << 16 | e[1] << 8 | e[2])
+                (bgrList, value) => bgrList.last.length < 3
+                    ? (bgrList..last.add(value))
+                    : (bgrList..add([value])))
+            .map((e) => 0xff000000 | e[2] << 16 | e[1] << 8 | e[0])
             .toList();
       case 32:
-        final values = buffer.asUint32List().skip(header.offBits ~/ 4);
-        return info.header.compression == BICompression.bitFields
-            ? values
-                .map((element) =>
-                    (element & info.blueMask) |
-                    (element & info.greenMask) |
-                    (element & info.redMask))
-                .toList()
-            : values.toList();
+        return buffer.asUint32List().map((e) {
+          final isBitField = info.header.compression == BICompression.bitFields;
+          final redMask = isBitField ? info.redMask : 0x00ff0000;
+          final greenMask = isBitField ? info.greenMask : 0x0000ff00;
+          final blueMask = isBitField ? info.blueMask : 0x000000ff;
+
+          return isBitField
+              ? (e & info.blueMask) | (e & info.greenMask) | (e & info.redMask)
+              : 0xff000000 | e;
+        }).toList();
       default:
         throw Exception('Unsupported bit count (${info.header.bitCount}).');
     }
@@ -129,7 +143,7 @@ enum BICompression { rgb, rle8, rle4, bitFields, jpeg, png }
 
 class BitmapInfo {
   final BitmapInfoHeader header;
-  final List<RgbQuad> colors;
+  final List<RGBQuad> colors;
   final int redMask;
   final int greenMask;
   final int blueMask;
@@ -144,9 +158,9 @@ class BitmapInfo {
 
   factory BitmapInfo.fromBytes(ByteData bytes) {
     final header = BitmapInfoHeader.fromBytes(bytes);
-    final colors = <RgbQuad>[];
+    final colors = <RGBQuad>[];
 
-    var offset = bytes.offsetInBytes + header.size;
+    var offset = header.size;
 
     int redMask;
     int greenMask;
@@ -154,15 +168,15 @@ class BitmapInfo {
 
     if (header.compression == BICompression.bitFields &&
         (header.bitCount == 16 || header.bitCount == 32)) {
-      redMask = bytes.getUint32(offset);
+      redMask = bytes.getUint32(offset, Endian.little);
       offset += 4;
-      greenMask = bytes.getUint32(offset);
+      greenMask = bytes.getUint32(offset, Endian.little);
       offset += 4;
-      blueMask = bytes.getUint32(offset);
+      blueMask = bytes.getUint32(offset, Endian.little);
     }
 
     for (; offset < bytes.lengthInBytes; offset += 4) {
-      colors.add(RgbQuad.fromBytes(bytes.buffer.asByteData(offset, 4)));
+      colors.add(RGBQuad.fromBytes(bytes.buffer.asByteData(offset, 4)));
     }
 
     return BitmapInfo._(
@@ -222,16 +236,16 @@ class BitmapInfoHeader {
       );
 }
 
-class RgbQuad {
+class RGBQuad {
   final int blue;
   final int green;
   final int red;
   final int reserved;
 
-  const RgbQuad._({this.blue, this.green, this.red, this.reserved})
+  const RGBQuad._({this.blue, this.green, this.red, this.reserved})
       : assert(reserved == 0);
 
-  factory RgbQuad.fromBytes(ByteData bytes) => RgbQuad._(
+  factory RGBQuad.fromBytes(ByteData bytes) => RGBQuad._(
         blue: bytes.getUint8(0),
         green: bytes.getUint8(1),
         red: bytes.getUint8(2),
