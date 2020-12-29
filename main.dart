@@ -3,7 +3,7 @@ import 'dart:io';
 import 'bitmap_file.dart';
 
 void main() {
-  final gray = File('./images/rgb16.bmp');
+  final gray = File('./images/rgb32bfdef.bmp');
   final byteBuffer = gray.readAsBytesSync().buffer;
   final bitmap = BitmapFile.fromBuffer(byteBuffer);
 

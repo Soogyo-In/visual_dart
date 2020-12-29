@@ -72,17 +72,22 @@ class BitmapFile {
             while ((redMask & (1 << offsetRed)) == 0) offsetRed++;
             while ((greenMask & (1 << offsetGreen)) == 0) offsetGreen++;
             while ((blueMask & (1 << offsetBlue)) == 0) offsetBlue++;
+
+            offsetRed = 16 - offsetRed;
+            offsetGreen = 8 - offsetGreen;
           } else {
-            offsetRed = 10;
-            offsetRed = 5;
+            // Gap between default red offset 10 from RGB555 to offset 16 from ARGB8888
+            offsetRed = 6;
+            // Gap between default green offset 5 from RGB555 to offset 8 from ARGB8888
+            offsetGreen = 3;
           }
 
           // Red and green values have already shifted to the left respectively.
           // So shift remain bits for each. But blue color must start from least
           // significant bit. So shift to the right.
           return 0xff000000 |
-              ((e & redMask) << (16 - offsetRed)) |
-              ((e & greenMask) << (8 - offsetGreen)) |
+              ((e & redMask) << offsetRed) |
+              ((e & greenMask) << offsetGreen) |
               (e & blueMask) >> offsetBlue;
         }).toList();
       case 24:
@@ -102,9 +107,24 @@ class BitmapFile {
           final greenMask = isBitField ? info.greenMask : 0x0000ff00;
           final blueMask = isBitField ? info.blueMask : 0x000000ff;
 
-          return isBitField
-              ? (e & info.blueMask) | (e & info.greenMask) | (e & info.redMask)
-              : 0xff000000 | e;
+          // Specify offsets for make ARGB model.
+          if (isBitField) {
+            var offsetRed = 0;
+            var offsetGreen = 0;
+            var offsetBlue = 0;
+
+            while ((redMask & (1 << offsetRed)) == 0) offsetRed++;
+            while ((greenMask & (1 << offsetGreen)) == 0) offsetGreen++;
+            while ((blueMask & (1 << offsetBlue)) == 0) offsetBlue++;
+
+            final red = (e & redMask) >> offsetRed;
+            final green = (e & greenMask) >> offsetGreen;
+            final blue = (e & blueMask) >> offsetBlue;
+
+            return 0xff000000 | red << 16 | green << 8 | blue;
+          } else {
+            return 0xff000000 | e;
+          }
         }).toList();
       default:
         throw Exception('Unsupported bit count (${info.header.bitCount}).');
