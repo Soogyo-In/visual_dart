@@ -239,7 +239,11 @@ class BitmapInfoHeader {
                 compression == BICompression.bitFields)
             : true),
         assert(planes == 1),
-        assert([0, 1, 4, 8, 16, 24, 32].contains(bitCount));
+        assert([0, 1, 4, 8, 16, 24, 32].contains(bitCount)) {
+    if (size != 40) {
+      throw Exception('Unsupported Bitmap version. Only support version 3.');
+    }
+  }
 
   factory BitmapInfoHeader.fromBytes(ByteData bytes) => BitmapInfoHeader._(
         size: bytes.getUint32(0, Endian.little),
