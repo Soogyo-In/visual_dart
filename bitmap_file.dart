@@ -35,7 +35,7 @@ class BitmapFile {
   ]) {
     final formed = _getPixelColorBy(model).toList();
     final clipped = List.generate(
-      info.header.height,
+      info.header.unsignedHeight,
       (index) {
         final start = index * info.header.paddedWidth * 4;
         return formed.sublist(start, start + info.header.width * 4)
@@ -345,6 +345,8 @@ class BitmapInfoHeader {
       );
 
   int get paddedWidth => width % 4 == 0 ? width : (width / 4).ceil() * 4;
+
+  int get unsignedHeight => height < 0 ? -height : height;
 }
 
 class RGBQuad {
