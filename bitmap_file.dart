@@ -91,12 +91,12 @@ class BitmapFile {
               info.colors[(element >> 3) & 1].argb,
               info.colors[(element >> 2) & 1].argb,
               info.colors[(element >> 1) & 1].argb,
-              info.colors[(element >> 0) & 1].argb,
+              info.colors[element & 1].argb,
             ]);
       case 4:
         return buffer.asUint8List().expand((element) => [
-              info.colors[element & (1 << 7 | 1 << 6 | 1 << 5 | 1 << 4)].argb,
-              info.colors[element & (1 << 3 | 1 << 2 | 1 << 1 | 1 << 0)].argb,
+              info.colors[(element >> 4) & 0xf].argb,
+              info.colors[element & 0xf].argb,
             ]);
       case 8:
         return buffer.asUint8List().map((e) => info.colors[e].argb).toList();
