@@ -1,12 +1,16 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+enum ColorModel { rgba, bgra, argb, abgr }
+
 class BitmapFile {
   final BitmapFileHeader header;
   final BitmapInfo info;
-  final List<int> pixels;
 
-  const BitmapFile._(this.header, this.info, this.pixels);
+  /// argb
+  final Iterable<int> _pixels;
+
+  const BitmapFile._(this.header, this.info, this._pixels);
 
   factory BitmapFile.fromBuffer(ByteBuffer buffer) {
     final header = BitmapFileHeader.fromBytes(
@@ -14,7 +18,7 @@ class BitmapFile {
     );
     final info = BitmapInfo.fromBytes(buffer.asByteData(
       BitmapFileHeader.structureSize,
-      header.offBits - BitmapFileHeader.structureSize,
+      header.offBits,
     ));
     final pixels = _parsePixels(
       buffer.asUint8List().sublist(header.offBits).buffer,
@@ -25,7 +29,52 @@ class BitmapFile {
     return BitmapFile._(header, info, pixels);
   }
 
-  static List<int> _parsePixels(
+  Uint8List getPixels8888([
+    ColorModel model = ColorModel.bgra,
+    bool topDown = false,
+  ]) {
+    final formed = _getPixelColorBy(model).toList();
+    final clipped = List.generate(
+      info.header.height,
+      (index) {
+        final start = index * info.header.paddedWidth * 4;
+        return formed.sublist(start, start + info.header.width * 4)
+          ..addAll(List.filled(
+            (info.header.paddedWidth - info.header.width) * 4,
+            0,
+          ));
+      },
+    );
+    Iterable<int> pixels;
+
+    if (topDown) {
+      pixels = info.header.height < 0
+          ? clipped.reversed.expand((element) => element)
+          : clipped.expand((element) => element);
+    } else {
+      pixels = info.header.height < 0
+          ? clipped.expand((element) => element)
+          : clipped.reversed.expand((element) => element);
+    }
+
+    return Uint8List.fromList(pixels.toList());
+  }
+
+  Uint32List getPixels32([
+    ColorModel model = ColorModel.bgra,
+    bool topDown = false,
+  ]) {
+    final pixels8888 = getPixels8888();
+    final pixels32 = List.generate(pixels8888.length ~/ 4,
+            (index) => pixels8888.sublist(index * 4, index * 4 + 4))
+        .expand(
+            (element) => [element[0] | element[1] | element[2] | element[3]])
+        .toList();
+
+    return Uint32List.fromList(pixels32);
+  }
+
+  static Iterable<int> _parsePixels(
     ByteBuffer buffer,
     BitmapFileHeader header,
     BitmapInfo info,
@@ -125,6 +174,45 @@ class BitmapFile {
         });
       default:
         throw Exception('Unsupported bit count (${info.header.bitCount}).');
+    }
+  }
+
+  Iterable<int> _getPixelColorBy(ColorModel model) {
+    switch (model) {
+      case ColorModel.rgba:
+        return _pixels.expand((element) => [
+              (element & 0x00ff0000) >> 16,
+              (element & 0x0000ff00) >> 8,
+              element & 0x000000ff,
+              (element & 0xff000000) >> 24,
+            ]);
+        break;
+      case ColorModel.bgra:
+        return _pixels.expand((element) => [
+              element & 0x000000ff,
+              (element & 0x0000ff00) >> 8,
+              (element & 0x00ff0000) >> 16,
+              (element & 0xff000000) >> 24,
+            ]);
+        break;
+      case ColorModel.argb:
+        return _pixels.expand((element) => [
+              (element & 0xff000000) >> 24,
+              (element & 0x00ff0000) >> 16,
+              (element & 0x0000ff00) >> 8,
+              element & 0x000000ff,
+            ]);
+        break;
+      case ColorModel.abgr:
+        return _pixels.expand((element) => [
+              (element & 0xff000000) >> 24,
+              element & 0x000000ff,
+              (element & 0x0000ff00) >> 8,
+              (element & 0x00ff0000) >> 16,
+            ]);
+        break;
+      default:
+        throw Exception('Cannot rearrange bytes by null.');
     }
   }
 }
@@ -274,4 +362,6 @@ class RGBQuad {
         red: bytes.getUint8(2),
         reserved: bytes.getUint8(3),
       );
+
+  int get argb => 0xff000000 | red << 16 | green << 8 | blue;
 }
