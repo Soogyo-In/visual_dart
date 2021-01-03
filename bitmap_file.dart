@@ -35,22 +35,22 @@ class BitmapFile {
         return [];
       case 1:
         return buffer.asUint8List().expand((element) => [
-              element & 1 << 7 == 0 ? 0 : 1,
-              element & 1 << 6 == 0 ? 0 : 1,
-              element & 1 << 5 == 0 ? 0 : 1,
-              element & 1 << 4 == 0 ? 0 : 1,
-              element & 1 << 3 == 0 ? 0 : 1,
-              element & 1 << 2 == 0 ? 0 : 1,
-              element & 1 << 1 == 0 ? 0 : 1,
-              element & 1 << 0 == 0 ? 0 : 1,
+              info.colors[(element >> 7) & 1].argb,
+              info.colors[(element >> 6) & 1].argb,
+              info.colors[(element >> 5) & 1].argb,
+              info.colors[(element >> 4) & 1].argb,
+              info.colors[(element >> 3) & 1].argb,
+              info.colors[(element >> 2) & 1].argb,
+              info.colors[(element >> 1) & 1].argb,
+              info.colors[(element >> 0) & 1].argb,
             ]);
       case 4:
         return buffer.asUint8List().expand((element) => [
-              element & (1 << 7 | 1 << 6 | 1 << 5 | 1 << 4),
-              element & (1 << 3 | 1 << 2 | 1 << 1 | 1 << 0),
+              info.colors[element & (1 << 7 | 1 << 6 | 1 << 5 | 1 << 4)].argb,
+              info.colors[element & (1 << 3 | 1 << 2 | 1 << 1 | 1 << 0)].argb,
             ]);
       case 8:
-        return buffer.asUint8List();
+        return buffer.asUint8List().map((e) => info.colors[e].argb).toList();
       case 16:
         return buffer.asUint16List().map((e) {
           final isBitField = info.header.compression == BICompression.bitFields;
@@ -89,17 +89,14 @@ class BitmapFile {
               ((e & redMask) << offsetRed) |
               ((e & greenMask) << offsetGreen) |
               (e & blueMask) >> offsetBlue;
-        }).toList();
+        });
       case 24:
-        return buffer
-            .asUint8List()
-            .fold<List<List<int>>>(
-                [[]],
-                (bgrList, value) => bgrList.last.length < 3
-                    ? (bgrList..last.add(value))
-                    : (bgrList..add([value])))
-            .map((e) => 0xff000000 | e[2] << 16 | e[1] << 8 | e[0])
-            .toList();
+        return buffer.asUint8List().fold<List<List<int>>>(
+            [[]],
+            (bgrList, value) => bgrList.last.length < 3
+                ? (bgrList..last.add(value))
+                : (bgrList..add([value]))).map(
+            (e) => 0xff000000 | e[2] << 16 | e[1] << 8 | e[0]);
       case 32:
         return buffer.asUint32List().map((e) {
           final isBitField = info.header.compression == BICompression.bitFields;
@@ -125,7 +122,7 @@ class BitmapFile {
           } else {
             return 0xff000000 | e;
           }
-        }).toList();
+        });
       default:
         throw Exception('Unsupported bit count (${info.header.bitCount}).');
     }
@@ -180,7 +177,7 @@ class BitmapInfo {
     final header = BitmapInfoHeader.fromBytes(bytes);
     final colors = <RGBQuad>[];
 
-    var offset = header.size;
+    var offset = header.size + bytes.offsetInBytes;
 
     int redMask;
     int greenMask;
@@ -258,6 +255,8 @@ class BitmapInfoHeader {
         clrUsed: bytes.getUint32(32, Endian.little),
         clrImportant: bytes.getUint32(36, Endian.little),
       );
+
+  int get paddedWidth => width % 4 == 0 ? width : (width / 4).ceil() * 4;
 }
 
 class RGBQuad {
