@@ -7,7 +7,7 @@ class BitmapFile {
   final BitmapFileHeader header;
   final BitmapInfo info;
 
-  /// argb
+  /// ARGB format.
   final Iterable<int> _pixels;
 
   const BitmapFile._(this.header, this.info, this._pixels);
@@ -83,35 +83,26 @@ class BitmapFile {
       case 0:
         return [];
       case 1:
-        return buffer.asUint8List().expand((element) => [
-              info.colors[(element >> 7) & 1].argb,
-              info.colors[(element >> 6) & 1].argb,
-              info.colors[(element >> 5) & 1].argb,
-              info.colors[(element >> 4) & 1].argb,
-              info.colors[(element >> 3) & 1].argb,
-              info.colors[(element >> 2) & 1].argb,
-              info.colors[(element >> 1) & 1].argb,
-              info.colors[element & 1].argb,
+        return buffer.asUint8List().expand((pixel) => [
+              info.colors[(pixel >> 7) & 1].argb,
+              info.colors[(pixel >> 6) & 1].argb,
+              info.colors[(pixel >> 5) & 1].argb,
+              info.colors[(pixel >> 4) & 1].argb,
+              info.colors[(pixel >> 3) & 1].argb,
+              info.colors[(pixel >> 2) & 1].argb,
+              info.colors[(pixel >> 1) & 1].argb,
+              info.colors[pixel & 1].argb,
             ]);
       case 4:
-        return buffer.asUint8List().expand((element) => [
-              info.colors[(element >> 4) & 0xf].argb,
-              info.colors[element & 0xf].argb,
+        return buffer.asUint8List().expand((pixel) => [
+              info.colors[(pixel >> 4) & 0xf].argb,
+              info.colors[pixel & 0xf].argb,
             ]);
       case 8:
-        return buffer.asUint8List().map((e) => info.colors[e].argb);
+        return buffer.asUint8List().map((pixel) => info.colors[pixel].argb);
       case 16:
-        return buffer.asUint16List().map((e) {
+        return buffer.asUint16List().map((pixel) {
           final isBitField = info.header.compression == BICompression.bitFields;
-          final makeSolidMask = (int length) {
-            int mask = 0;
-
-            while (length > 0) {
-              mask |= 1 << --length;
-            }
-
-            return mask;
-          };
 
           // Default color masks for 16bpp.
           // 0x7c00 = 0111 1100 0000 0000 (red)
@@ -120,167 +111,111 @@ class BitmapFile {
           final maskR = isBitField ? info.redMask : 0x7c00;
           final maskG = isBitField ? info.greenMask : 0x3e0;
           final maskB = isBitField ? info.blueMask : 0x1f;
-          var offsetR = 0;
-          var offsetG = 0;
-          var offsetB = 0;
-          var bitCntR = 0;
-          var bitCntG = 0;
-          var bitCntB = 0;
+          final rgb = _getColorFromBitMasks(pixel, maskR, maskG, maskB);
 
-          // Specify offsets for make ARGB model.
-          if (isBitField) {
-            while (maskR > 0) {
-              if ((maskR & (1 << offsetR)) == 0) {
-                offsetR++;
-              } else if (((maskR >> offsetR) & (1 << bitCntR)) != 0) {
-                bitCntR++;
-              } else {
-                break;
-              }
-            }
-            while (maskG > 0) {
-              if ((maskG & (1 << offsetG)) == 0) {
-                offsetG++;
-              } else if ((maskG >> offsetG) & (1 << bitCntG) != 0) {
-                bitCntG++;
-              } else {
-                break;
-              }
-            }
-            while (maskB > 0) {
-              if ((maskB & (1 << offsetB)) == 0) {
-                offsetB++;
-              } else if ((maskB >> offsetB) & (1 << bitCntB) != 0) {
-                bitCntB++;
-              } else {
-                break;
-              }
-            }
-          } else {
-            offsetR = 10;
-            offsetG = 5;
-            offsetB = 0;
-            bitCntR = 5;
-            bitCntG = 5;
-            bitCntB = 5;
-          }
-
-          // x = max value for bitCntR or bitCntG or bitCntB.
-          // y = max value for 8-bit.
-          // n = value in x.
-          // m = value in y.
-          // n / x = m / y
-          // m = ny / x
-          final red = bitCntR == 0
-              ? 0
-              : (((e & maskR) >> offsetR) * 0xff) / makeSolidMask(bitCntR);
-          final green = bitCntG == 0
-              ? 0
-              : (((e & maskG) >> offsetG) * 0xff) / makeSolidMask(bitCntG);
-          final blue = bitCntB == 0
-              ? 0
-              : (((e & maskB) >> offsetB) * 0xff) / makeSolidMask(bitCntB);
-
-          // Red and green values have already shifted to the left respectively.
-          // So shift remain bits for each. But blue color must start from least
-          // significant bit. So shift to the right.
-          return 0xff000000 |
-              (red.round() << 16) |
-              (green.round() << 8) |
-              blue.round();
+          return 0xff000000 | (rgb[0] << 16) | (rgb[1] << 8) | rgb[2];
         });
       case 24:
         return buffer.asUint8List().fold<List<List<int>>>(
-            [[]],
-            (bgrList, value) => bgrList.last.length < 3
-                ? (bgrList..last.add(value))
-                : (bgrList..add([value]))).map(
-            (e) => 0xff000000 | e[2] << 16 | e[1] << 8 | e[0]);
+          [[]],
+          (bgrList, value) => bgrList.last.length < 3
+              ? (bgrList..last.add(value))
+              : (bgrList..add([value])),
+        ).map(
+          (pixel) => 0xff000000 | pixel[2] << 16 | pixel[1] << 8 | pixel[0],
+        );
       case 32:
-        return buffer.asUint32List().map((e) {
+        return buffer.asUint32List().map((pixel) {
           final isBitField = info.header.compression == BICompression.bitFields;
-          final maskR = isBitField ? info.redMask : 0x00ff0000;
-          final maskG = isBitField ? info.greenMask : 0x0000ff00;
-          final maskB = isBitField ? info.blueMask : 0x000000ff;
 
-          // Specify offsets for make ARGB model.
           if (isBitField) {
-            final makeSolidMask = (int length) {
-              int mask = 0;
+            final rgb = _getColorFromBitMasks(
+              pixel,
+              info.redMask,
+              info.greenMask,
+              info.blueMask,
+            );
 
-              while (length > 0) {
-                mask |= 1 << --length;
-              }
-
-              return mask;
-            };
-
-            var offsetR = 0;
-            var offsetG = 0;
-            var offsetB = 0;
-            var bitCntR = 0;
-            var bitCntG = 0;
-            var bitCntB = 0;
-
-            // Specify offsets for make ARGB model.
-            while (maskR > 0) {
-              if ((maskR & (1 << offsetR)) == 0) {
-                offsetR++;
-              } else if (((maskR >> offsetR) & (1 << bitCntR)) != 0) {
-                bitCntR++;
-              } else {
-                break;
-              }
-            }
-            while (maskG > 0) {
-              if ((maskG & (1 << offsetG)) == 0) {
-                offsetG++;
-              } else if ((maskG >> offsetG) & (1 << bitCntG) != 0) {
-                bitCntG++;
-              } else {
-                break;
-              }
-            }
-            while (maskB > 0) {
-              if ((maskB & (1 << offsetB)) == 0) {
-                offsetB++;
-              } else if ((maskB >> offsetB) & (1 << bitCntB) != 0) {
-                bitCntB++;
-              } else {
-                break;
-              }
-            }
-
-            // x = max value for bitCntR or bitCntG or bitCntB.
-            // y = max value for 8-bit.
-            // n = value in x.
-            // m = value in y.
-            // n / x = m / y
-            // m = ny / x
-            final red = bitCntR == 0
-                ? 0
-                : (((e & maskR) >> offsetR) * 0xff) / makeSolidMask(bitCntR);
-            final green = bitCntG == 0
-                ? 0
-                : (((e & maskG) >> offsetG) * 0xff) / makeSolidMask(bitCntG);
-            final blue = bitCntB == 0
-                ? 0
-                : (((e & maskB) >> offsetB) * 0xff) / makeSolidMask(bitCntB);
-
-            // Red and green values have already shifted to the left respectively.
-            // So shift remain bits for each. But blue color must start from least
-            // significant bit. So shift to the right.
-            return 0xff000000 |
-                (red.round() << 16) |
-                (green.round() << 8) |
-                blue.round();
+            return 0xff000000 | (rgb[0] << 16) | (rgb[1] << 8) | rgb[2];
           } else {
-            return 0xff000000 | e;
+            return 0xff000000 | pixel;
           }
         });
       default:
         throw Exception('Unsupported bit count (${info.header.bitCount}).');
     }
+  }
+
+  static int _makeSolidMask(int length) {
+    int mask = 0;
+
+    while (length > 0) {
+      mask |= 1 << --length;
+    }
+
+    return mask;
+  }
+
+  /// Returns color value [List] order by red, green, blue.
+  static List<int> _getColorFromBitMasks(
+    int pixel,
+    int maskR,
+    int maskG,
+    int maskB,
+  ) {
+    var offsetR = 0;
+    var offsetG = 0;
+    var offsetB = 0;
+    var bitCntR = 0;
+    var bitCntG = 0;
+    var bitCntB = 0;
+
+    // Specify offsets for make ARGB model.
+    while (maskR > 0) {
+      if ((maskR & (1 << offsetR)) == 0) {
+        offsetR++;
+      } else if (((maskR >> offsetR) & (1 << bitCntR)) != 0) {
+        bitCntR++;
+      } else {
+        break;
+      }
+    }
+    while (maskG > 0) {
+      if ((maskG & (1 << offsetG)) == 0) {
+        offsetG++;
+      } else if ((maskG >> offsetG) & (1 << bitCntG) != 0) {
+        bitCntG++;
+      } else {
+        break;
+      }
+    }
+    while (maskB > 0) {
+      if ((maskB & (1 << offsetB)) == 0) {
+        offsetB++;
+      } else if ((maskB >> offsetB) & (1 << bitCntB) != 0) {
+        bitCntB++;
+      } else {
+        break;
+      }
+    }
+
+    // x = max value for bitCntR or bitCntG or bitCntB.
+    // y = max value for 8-bit.
+    // n = value in x.
+    // m = value in y.
+    // n / x = m / y
+    // m = ny / x
+    final red = bitCntR == 0
+        ? 0
+        : (((pixel & maskR) >> offsetR) * 0xff) / _makeSolidMask(bitCntR);
+    final green = bitCntG == 0
+        ? 0
+        : (((pixel & maskG) >> offsetG) * 0xff) / _makeSolidMask(bitCntG);
+    final blue = bitCntB == 0
+        ? 0
+        : (((pixel & maskB) >> offsetB) * 0xff) / _makeSolidMask(bitCntB);
+
+    return [red.round(), green.round(), blue.round()];
   }
 
   Iterable<int> _getPixelColorBy(ColorModel model) {
