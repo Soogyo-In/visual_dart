@@ -18,7 +18,7 @@ class BitmapFile {
     );
     final info = BitmapInfo.fromBytes(buffer.asByteData(
       BitmapFileHeader.structureSize,
-      header.offBits,
+      header.offBits - BitmapFileHeader.structureSize,
     ));
     final pixels = _parsePixels(
       buffer.asUint8List().sublist(header.offBits).buffer,
@@ -99,45 +99,95 @@ class BitmapFile {
               info.colors[element & 0xf].argb,
             ]);
       case 8:
-        return buffer.asUint8List().map((e) => info.colors[e].argb).toList();
+        return buffer.asUint8List().map((e) => info.colors[e].argb);
       case 16:
         return buffer.asUint16List().map((e) {
           final isBitField = info.header.compression == BICompression.bitFields;
+          final makeSolidMask = (int length) {
+            int mask = 0;
+
+            while (length > 0) {
+              mask |= 1 << --length;
+            }
+
+            return mask;
+          };
 
           // Default color masks for 16bpp.
           // 0x7c00 = 0111 1100 0000 0000 (red)
           //  0x3e0 = 0000 0011 1110 0000 (green)
           //   0x1f = 0000 0000 0001 1111 (blue)
-          final redMask = isBitField ? info.redMask : 0x7c00;
-          final greenMask = isBitField ? info.greenMask : 0x3e0;
-          final blueMask = isBitField ? info.blueMask : 0x1f;
-
-          var offsetRed = 0;
-          var offsetGreen = 0;
-          var offsetBlue = 0;
+          final maskR = isBitField ? info.redMask : 0x7c00;
+          final maskG = isBitField ? info.greenMask : 0x3e0;
+          final maskB = isBitField ? info.blueMask : 0x1f;
+          var offsetR = 0;
+          var offsetG = 0;
+          var offsetB = 0;
+          var bitCntR = 0;
+          var bitCntG = 0;
+          var bitCntB = 0;
 
           // Specify offsets for make ARGB model.
           if (isBitField) {
-            while ((redMask & (1 << offsetRed)) == 0) offsetRed++;
-            while ((greenMask & (1 << offsetGreen)) == 0) offsetGreen++;
-            while ((blueMask & (1 << offsetBlue)) == 0) offsetBlue++;
-
-            offsetRed = 16 - offsetRed;
-            offsetGreen = 8 - offsetGreen;
+            while (maskR > 0) {
+              if ((maskR & (1 << offsetR)) == 0) {
+                offsetR++;
+              } else if (((maskR >> offsetR) & (1 << bitCntR)) != 0) {
+                bitCntR++;
+              } else {
+                break;
+              }
+            }
+            while (maskG > 0) {
+              if ((maskG & (1 << offsetG)) == 0) {
+                offsetG++;
+              } else if ((maskG >> offsetG) & (1 << bitCntG) != 0) {
+                bitCntG++;
+              } else {
+                break;
+              }
+            }
+            while (maskB > 0) {
+              if ((maskB & (1 << offsetB)) == 0) {
+                offsetB++;
+              } else if ((maskB >> offsetB) & (1 << bitCntB) != 0) {
+                bitCntB++;
+              } else {
+                break;
+              }
+            }
           } else {
-            // Gap between default red offset 10 from RGB555 to offset 16 from ARGB8888
-            offsetRed = 6;
-            // Gap between default green offset 5 from RGB555 to offset 8 from ARGB8888
-            offsetGreen = 3;
+            offsetR = 10;
+            offsetG = 5;
+            offsetB = 0;
+            bitCntR = 5;
+            bitCntG = 5;
+            bitCntB = 5;
           }
+
+          // x = max value for bitCntR or bitCntG or bitCntB.
+          // y = max value for 8-bit.
+          // n = value in x.
+          // m = value in y.
+          // n / x = m / y
+          // m = ny / x
+          final red = bitCntR == 0
+              ? 0
+              : (((e & maskR) >> offsetR) * 0xff) / makeSolidMask(bitCntR);
+          final green = bitCntG == 0
+              ? 0
+              : (((e & maskG) >> offsetG) * 0xff) / makeSolidMask(bitCntG);
+          final blue = bitCntB == 0
+              ? 0
+              : (((e & maskB) >> offsetB) * 0xff) / makeSolidMask(bitCntB);
 
           // Red and green values have already shifted to the left respectively.
           // So shift remain bits for each. But blue color must start from least
           // significant bit. So shift to the right.
           return 0xff000000 |
-              ((e & redMask) << offsetRed) |
-              ((e & greenMask) << offsetGreen) |
-              (e & blueMask) >> offsetBlue;
+              (red.round() << 16) |
+              (green.round() << 8) |
+              blue.round();
         });
       case 24:
         return buffer.asUint8List().fold<List<List<int>>>(
@@ -265,7 +315,7 @@ class BitmapInfo {
     final header = BitmapInfoHeader.fromBytes(bytes);
     final colors = <RGBQuad>[];
 
-    var offset = header.size + bytes.offsetInBytes;
+    var offset = header.size;
 
     int redMask;
     int greenMask;
@@ -278,10 +328,15 @@ class BitmapInfo {
       greenMask = bytes.getUint32(offset, Endian.little);
       offset += 4;
       blueMask = bytes.getUint32(offset, Endian.little);
+      offset += 4;
     }
 
     for (; offset < bytes.lengthInBytes; offset += 4) {
-      colors.add(RGBQuad.fromBytes(bytes.buffer.asByteData(offset, 4)));
+      colors.add(
+        RGBQuad.fromBytes(
+          bytes.buffer.asByteData(offset + bytes.offsetInBytes, 4),
+        ),
+      );
     }
 
     return BitmapInfo._(
