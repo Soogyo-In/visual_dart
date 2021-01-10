@@ -199,25 +199,81 @@ class BitmapFile {
       case 32:
         return buffer.asUint32List().map((e) {
           final isBitField = info.header.compression == BICompression.bitFields;
-          final redMask = isBitField ? info.redMask : 0x00ff0000;
-          final greenMask = isBitField ? info.greenMask : 0x0000ff00;
-          final blueMask = isBitField ? info.blueMask : 0x000000ff;
+          final maskR = isBitField ? info.redMask : 0x00ff0000;
+          final maskG = isBitField ? info.greenMask : 0x0000ff00;
+          final maskB = isBitField ? info.blueMask : 0x000000ff;
 
           // Specify offsets for make ARGB model.
           if (isBitField) {
-            var offsetRed = 0;
-            var offsetGreen = 0;
-            var offsetBlue = 0;
+            final makeSolidMask = (int length) {
+              int mask = 0;
 
-            while ((redMask & (1 << offsetRed)) == 0) offsetRed++;
-            while ((greenMask & (1 << offsetGreen)) == 0) offsetGreen++;
-            while ((blueMask & (1 << offsetBlue)) == 0) offsetBlue++;
+              while (length > 0) {
+                mask |= 1 << --length;
+              }
 
-            final red = (e & redMask) >> offsetRed;
-            final green = (e & greenMask) >> offsetGreen;
-            final blue = (e & blueMask) >> offsetBlue;
+              return mask;
+            };
 
-            return 0xff000000 | red << 16 | green << 8 | blue;
+            var offsetR = 0;
+            var offsetG = 0;
+            var offsetB = 0;
+            var bitCntR = 0;
+            var bitCntG = 0;
+            var bitCntB = 0;
+
+            // Specify offsets for make ARGB model.
+            while (maskR > 0) {
+              if ((maskR & (1 << offsetR)) == 0) {
+                offsetR++;
+              } else if (((maskR >> offsetR) & (1 << bitCntR)) != 0) {
+                bitCntR++;
+              } else {
+                break;
+              }
+            }
+            while (maskG > 0) {
+              if ((maskG & (1 << offsetG)) == 0) {
+                offsetG++;
+              } else if ((maskG >> offsetG) & (1 << bitCntG) != 0) {
+                bitCntG++;
+              } else {
+                break;
+              }
+            }
+            while (maskB > 0) {
+              if ((maskB & (1 << offsetB)) == 0) {
+                offsetB++;
+              } else if ((maskB >> offsetB) & (1 << bitCntB) != 0) {
+                bitCntB++;
+              } else {
+                break;
+              }
+            }
+
+            // x = max value for bitCntR or bitCntG or bitCntB.
+            // y = max value for 8-bit.
+            // n = value in x.
+            // m = value in y.
+            // n / x = m / y
+            // m = ny / x
+            final red = bitCntR == 0
+                ? 0
+                : (((e & maskR) >> offsetR) * 0xff) / makeSolidMask(bitCntR);
+            final green = bitCntG == 0
+                ? 0
+                : (((e & maskG) >> offsetG) * 0xff) / makeSolidMask(bitCntG);
+            final blue = bitCntB == 0
+                ? 0
+                : (((e & maskB) >> offsetB) * 0xff) / makeSolidMask(bitCntB);
+
+            // Red and green values have already shifted to the left respectively.
+            // So shift remain bits for each. But blue color must start from least
+            // significant bit. So shift to the right.
+            return 0xff000000 |
+                (red.round() << 16) |
+                (green.round() << 8) |
+                blue.round();
           } else {
             return 0xff000000 | e;
           }
@@ -399,7 +455,9 @@ class BitmapInfoHeader {
         clrImportant: bytes.getUint32(36, Endian.little),
       );
 
-  int get paddedWidth => width % 4 == 0 ? width : (width / 4).ceil() * 4;
+  int get paddedWidth => (width * bitCount) % 32 == 0
+      ? width
+      : ((((width * bitCount) / 32).ceil()) * 32) ~/ bitCount;
 
   int get unsignedHeight => height < 0 ? -height : height;
 }
