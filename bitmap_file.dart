@@ -1,3 +1,4 @@
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -8,9 +9,11 @@ class BitmapFile {
   final BitmapInfo info;
 
   /// ARGB format.
-  final Iterable<int> _pixels;
+  List<int> _pixels;
 
-  const BitmapFile._(this.header, this.info, this._pixels);
+  BitmapFile._(this.header, this.info, ByteBuffer pixelArray) {
+    _pixels = _parsePixels(pixelArray).toList();
+  }
 
   factory BitmapFile.fromBuffer(ByteBuffer buffer) {
     final header = BitmapFileHeader.fromBytes(
@@ -20,13 +23,12 @@ class BitmapFile {
       BitmapFileHeader.structureSize,
       header.offBits - BitmapFileHeader.structureSize,
     ));
-    final pixels = _parsePixels(
-      buffer.asUint8List().sublist(header.offBits).buffer,
+
+    return BitmapFile._(
       header,
       info,
+      buffer.asUint8List().sublist(header.offBits).buffer,
     );
-
-    return BitmapFile._(header, info, pixels);
   }
 
   Uint8List getPixels8888([
@@ -34,15 +36,17 @@ class BitmapFile {
     bool topDown = false,
   ]) {
     final formed = _getPixelColorBy(model).toList();
+    final stride = info.header.compression == BICompression.rle4 ||
+            info.header.compression == BICompression.rle8
+        ? info.header.width
+        : info.header.paddedWidth;
+    final paddingSize = info.header.paddedWidth - info.header.width;
     final clipped = List.generate(
       info.header.unsignedHeight,
       (index) {
-        final start = index * info.header.paddedWidth * 4;
+        final start = index * stride * 4;
         return formed.sublist(start, start + info.header.width * 4)
-          ..addAll(List.filled(
-            (info.header.paddedWidth - info.header.width) * 4,
-            0,
-          ));
+          ..addAll(List.filled(paddingSize * 4, 0));
       },
     );
     Iterable<int> pixels;
@@ -74,11 +78,7 @@ class BitmapFile {
     return Uint32List.fromList(pixels32);
   }
 
-  static Iterable<int> _parsePixels(
-    ByteBuffer buffer,
-    BitmapFileHeader header,
-    BitmapInfo info,
-  ) {
+  Iterable<int> _parsePixels(ByteBuffer buffer) {
     switch (info.header.bitCount) {
       case 0:
         return [];
@@ -94,11 +94,21 @@ class BitmapFile {
               info.colors[pixel & 1].argb,
             ]);
       case 4:
+        if (info.header.compression == BICompression.rle4) {
+          return _decodeRLE(buffer.asUint8List())
+              .map((pixel) => info.colors[pixel].argb);
+        }
+
         return buffer.asUint8List().expand((pixel) => [
               info.colors[(pixel >> 4) & 0xf].argb,
               info.colors[pixel & 0xf].argb,
             ]);
       case 8:
+        if (info.header.compression == BICompression.rle8) {
+          return _decodeRLE(buffer.asUint8List())
+              .map((pixel) => info.colors[pixel].argb);
+        }
+
         return buffer.asUint8List().map((pixel) => info.colors[pixel].argb);
       case 16:
         return buffer.asUint16List().map((pixel) {
@@ -144,6 +154,80 @@ class BitmapFile {
       default:
         throw Exception('Unsupported bit count (${info.header.bitCount}).');
     }
+  }
+
+  List<int> _decodeRLE(Uint8List bytes) {
+    if (info.header.compression != BICompression.rle4 &&
+        info.header.compression != BICompression.rle8) {
+      throw ArgumentError.value(
+        info.header.compression,
+        'BICompression',
+        'The bitmap file was not compressed with RLE, but tried to decoding RLE compression.',
+      );
+    }
+
+    final pixels = <int>[];
+    final compressed = Queue<int>.from(bytes);
+
+    while (compressed.isNotEmpty) {
+      final first = compressed.removeFirst();
+      final second = compressed.removeFirst();
+
+      if (first == 0) {
+        if (second == 0) {
+          // End of line.
+          pixels.addAll(List.filled(pixels.length % info.header.width, 0));
+        } else if (second == 1) {
+          // End of bitmap.
+          break;
+        } else if (second == 2) {
+          // Delta offset.
+          final offsetX = compressed.removeFirst();
+          final offsetY = compressed.removeFirst();
+
+          pixels.addAll(List.filled(offsetX + offsetY * info.header.width, 0));
+        } else {
+          // Apsolute mode.
+          final temp = <int>[];
+
+          if (info.header.compression == BICompression.rle8) {
+            final wordBoundedLength = (second / 2).ceil() * 2;
+
+            for (var i = 0; i < wordBoundedLength; i++) {
+              temp.add(compressed.removeFirst());
+            }
+          } else if (info.header.compression == BICompression.rle4) {
+            final byteLength = (second / 2).ceil();
+            final wordBoundedLength = (byteLength / 2).ceil() * 2;
+
+            for (var i = 0; i < wordBoundedLength; i++) {
+              final byte = compressed.removeFirst();
+              temp.addAll([(byte >> 4) & 0xf, byte & 0xf]);
+            }
+          }
+
+          pixels.addAll(temp.take(second));
+        }
+      } else {
+        // Encoded mode.
+        if (info.header.compression == BICompression.rle8) {
+          for (var i = 0; i < first; i++) {
+            pixels.add(second);
+          }
+        } else if (info.header.compression == BICompression.rle4) {
+          var orderSwitcher = 1;
+
+          for (var i = 0; i < first; i++) {
+            final pixel =
+                orderSwitcher > 0 ? (second >> 4) & 0xf : second & 0xf;
+            pixels.add(pixel);
+            orderSwitcher *= -1;
+          }
+        }
+      }
+    }
+
+    return pixels;
   }
 
   static int _makeSolidMask(int length) {
